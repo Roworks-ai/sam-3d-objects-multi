@@ -4,7 +4,7 @@
 build:
   # GPU and CUDA configuration
   gpu: true
-  cuda: "12.3"
+  cuda: "12.1"
 
   # Python version
   python_version: "3.11"
@@ -22,6 +22,14 @@ build:
 
   # Custom build commands - Steps 1-7 from Dockerfile.sam3d (no virtual environment)
   run:
+    # FIRST: Add NVIDIA repo and install NCCL + cuDNN 9
+    - "wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+    - "dpkg -i cuda-keyring_1.1-1_all.deb"
+    - "rm cuda-keyring_1.1-1_all.deb"
+    - "apt-get update"
+    - "apt-get install -y --allow-change-held-packages libnccl2 libnccl-dev libcudnn9-cuda-12 libcudnn9-dev-cuda-12"
+    - "ldconfig"
+
     # Set environment variables for CUDA compilation
     - "echo 'export CUDA_HOME=/usr/local/cuda' >> /etc/bash.bashrc"
     - "echo 'export PATH=/usr/local/cuda/bin:$PATH' >> /etc/bash.bashrc"
@@ -82,8 +90,16 @@ build:
     # Models are downloaded at runtime OR pre-downloaded locally before cog predict.
     # To pre-download: cd sam3d-multi && huggingface-cli download --repo-type model --local-dir checkpoints/hf-download facebook/sam-3d-objects && mv checkpoints/hf-download/checkpoints checkpoints/hf && rm -rf checkpoints/hf-download
 
-    # Step 10: Final cleanup
-    - "rm -rf ~/.cache/huggingface/hub /tmp/* /root/.cache"
+    # Step 10: Final cleanup (preserve space for model downloads)
+    - "rm -rf /tmp/* /root/.cache/pip"
+
+    # Step 11: Pre-download MoGe model checkpoint
+    - "echo 'Pre-downloading MoGe model checkpoint...'"
+    - "python -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='Ruicheng/moge-vitl', cache_dir='/root/.cache/huggingface/hub')\""
+
+    # Step 12: Install Cog with compatible dependencies (MUST BE LAST)
+    # - "pip install --no-cache-dir 'cog==0.9.16' 'pydantic==1.10.13' 'fastapi==0.95.2'"
+    - "pip install --no-cache-dir 'cog>=0.10.0'"
 
 # Predict interface
 predict: "predict.py:Predictor"

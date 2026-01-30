@@ -2,15 +2,19 @@
 # https://cog.run/python
 
 import os
+from dotenv import load_dotenv
+
+# Load .env file if present (for HF_TOKEN, etc.)
+load_dotenv()
 import subprocess
 import shutil
 import tarfile
 import tempfile
 import zipfile
-from pathlib import Path
-from typing import List
+from pathlib import Path as PathlibPath
 
-from cog import BasePredictor, Input, Path as CogPath  # noqa: cog is available at runtime
+from cog import BasePredictor, Input  # noqa: cog is available at runtime
+import cog
 
 class Predictor(BasePredictor):
     def setup(self) -> None:
@@ -23,7 +27,7 @@ class Predictor(BasePredictor):
           mv checkpoints/hf-download/checkpoints checkpoints/hf
           rm -rf checkpoints/hf-download
         """
-        self.sam3d_dir = Path(__file__).parent
+        self.sam3d_dir = PathlibPath(__file__).parent
         self.model_tag = "hf"
 
         checkpoint_dir = self.sam3d_dir / "checkpoints" / self.model_tag
@@ -56,7 +60,7 @@ class Predictor(BasePredictor):
 
     def predict(
         self,
-        input_archive: CogPath = Input(
+        input_archive: cog.Path = Input(
             description="ZIP or TAR archive containing images and masks. Images: X.png, Masks: X_mask.png"
         ),
         mask_prompt: str = Input(
@@ -97,12 +101,13 @@ class Predictor(BasePredictor):
             description="Output directory path. If specified, results are copied here. If empty, results stay in visualization/",
             default=""
         ),
-    ) -> List[CogPath]:
+    ) -> cog.Path:
         """
-        Run SAM3D 3D reconstruction using run_inference.py subprocess
+        Run SAM3D 3D reconstruction using run_inference.py subprocess.
+        Returns a ZIP archive containing the output files (.glb, .ply).
         """
         # Extract archive to temp directory
-        work_dir = Path(tempfile.mkdtemp())
+        work_dir = PathlibPath(tempfile.mkdtemp())
         input_path = work_dir / "input"
         input_path.mkdir()
 
@@ -167,7 +172,7 @@ class Predictor(BasePredictor):
 
         # Collect output files from visualization directory
         # Output is saved to visualization/{dir_name}/ based on input
-        output_paths = []
+        output_files = []
         viz_dir = self.sam3d_dir / "visualization"
 
         if viz_dir.exists():
@@ -182,29 +187,28 @@ class Predictor(BasePredictor):
                 latest_output = output_dirs[0]
                 print(f"Collecting results from {latest_output}")
 
-                # If output_dir is specified, copy files there
-                if output_dir:
-                    output_dir_path = Path(output_dir)
-                    output_dir_path.mkdir(parents=True, exist_ok=True)
-                    print(f"Copying results to: {output_dir_path}")
+                for file in latest_output.glob("*"):
+                    if file.is_file() and file.suffix in ['.glb', '.ply']:
+                        output_files.append(file)
+                        print(f"  Found output: {file.name}")
 
-                    for file in latest_output.glob("*"):
-                        if file.is_file() and file.suffix in ['.glb', '.ply']:
-                            dest_file = output_dir_path / file.name
-                            shutil.copy2(file, dest_file)
-                            output_paths.append(CogPath(dest_file))
-                            print(f"  Copied: {file.name} -> {dest_file}")
-                else:
-                    # Return files from visualization directory
-                    for file in latest_output.glob("*"):
-                        if file.is_file() and file.suffix in ['.glb', '.ply']:
-                            output_paths.append(CogPath(file))
-                            print(f"  Found output: {file.name}")
-
-        # Cleanup temp directory
-        shutil.rmtree(work_dir, ignore_errors=True)
-
-        if not output_paths:
+        if not output_files:
+            shutil.rmtree(work_dir, ignore_errors=True)
             raise Exception("No output files generated from inference")
 
-        return output_paths
+        # Create ZIP archive (avoids MIME type issues with .glb/.ply)
+        output_zip = work_dir / "sam3d_output.zip"
+        with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file in output_files:
+                zf.write(file, file.name)
+                print(f"  Added to archive: {file.name}")
+
+        # If output_dir specified, also copy individual files there
+        if output_dir:
+            output_dir_path = PathlibPath(output_dir)
+            output_dir_path.mkdir(parents=True, exist_ok=True)
+            for file in output_files:
+                shutil.copy2(file, output_dir_path / file.name)
+            print(f"Copied files to: {output_dir_path}")
+
+        return cog.Path(str(output_zip))
