@@ -20,3 +20,6 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Cog
+.cog/

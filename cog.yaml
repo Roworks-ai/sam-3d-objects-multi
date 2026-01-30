@@ -1,0 +1,78 @@
+# Configuration for Cog - SAM3D Multi-view
+# Reference: https://cog.run/yaml
+
+build:
+  # GPU and CUDA configuration
+  gpu: true
+  cuda: "12.3"
+
+  # Python version
+  python_version: "3.11"
+
+  # System packages (apt-get install)
+  system_packages:
+    - "wget"
+    - "git"
+    - "libgl1-mesa-glx"
+    - "libglib2.0-0"
+    - "software-properties-common"
+    - "build-essential"
+    - "ninja-build"
+    - "vim"
+
+  # Custom build commands - Steps 1-7 from Dockerfile.sam3d (no virtual environment)
+  run:
+    # Set environment variables for CUDA compilation
+    - "echo 'export CUDA_HOME=/usr/local/cuda' >> /etc/bash.bashrc"
+    - "echo 'export PATH=/usr/local/cuda/bin:$PATH' >> /etc/bash.bashrc"
+    - "echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> /etc/bash.bashrc"
+    - "echo 'export TORCH_CUDA_ARCH_LIST=\"7.0 7.5 8.0 8.6 8.9 9.0+PTX\"' >> /etc/bash.bashrc"
+    - "echo 'export FORCE_CUDA=1' >> /etc/bash.bashrc"
+
+    # Install boto3 for S3 access
+    - "pip install --no-cache-dir boto3"
+
+    # Step 1: Install PyTorch first (CRITICAL - must be installed before other packages)
+    - "pip install --no-cache-dir torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+
+    # Step 2: Install SAM3D core requirements with proper index URLs
+    - "CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='7.0 7.5 8.0 8.6 8.9 9.0+PTX' FORCE_CUDA=1 PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' pip install --no-cache-dir spconv-cu121==2.3.8 xformers==0.0.28.post3"
+    - "pip install --no-cache-dir roma==1.5.1 smplx==0.1.28 fvcore==0.1.5.post20221221 einops-exts==0.0.4"
+    - "pip install --no-cache-dir opencv-python==4.9.0.80 scikit-image==0.23.1"
+    - "pip install --no-cache-dir hydra-core==1.3.2 easydict==1.13 loguru==0.7.2"
+    - "pip install --no-cache-dir timm==0.9.16 lightning==2.3.3"
+    - "pip install --no-cache-dir bpy==4.3.0 pymeshfix==0.17.0 point-cloud-utils==0.29.5 xatlas==0.0.9"
+    - "pip install --no-cache-dir panda3d-gltf==1.2.1 OpenEXR==3.3.3 imath==0.0.2"
+    - "pip install --no-cache-dir av==12.0.0 decord==0.6.0"
+    - "pip install --no-cache-dir h5py==3.12.1 jsonlines==4.0.0 jsonpickle==3.0.4"
+    - "pip install --no-cache-dir astor==0.8.1 igraph==0.11.8 ftfy==6.2.0 orjson==3.10.0 optree==0.14.1"
+    - "pip install --no-cache-dir 'MoGe @ git+https://github.com/microsoft/MoGe.git@a8c37341bc0325ca99b9d57981cc3bb2bd3e255b'"
+
+    # Install additional dependencies for scene understanding
+    - "pip install --no-cache-dir accelerate huggingface-hub[cli] python-dotenv"
+    - "pip install --no-cache-dir open3d pyquaternion"
+    - "pip install --no-cache-dir 'transformers @ git+https://github.com/huggingface/transformers@40dc11cd3eb4126652aa41ef8272525affd4a636'"
+
+    # Step 3: Build and install PyTorch3D from source (REQUIRED)
+    - "echo 'Building PyTorch3D from source...'"
+    - "CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='7.0 7.5 8.0 8.6 8.9 9.0+PTX' FORCE_CUDA=1 PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' pip install --no-cache-dir --no-build-isolation 'git+https://github.com/facebookresearch/pytorch3d.git@75ebeeaea0908c5527e7b1e305fbc7681382db47'"
+
+    # Step 4: Install inference requirements (pre-built wheels)
+    - "CUDA_HOME=/usr/local/cuda PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' PIP_FIND_LINKS='https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html' pip install --no-cache-dir kaolin==0.17.0 seaborn==0.13.2 gradio==5.49.0"
+
+    # Step 5: Build and install gsplat from source (REQUIRED)
+    - "echo 'Building gsplat from source...'"
+    - "CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='7.0 7.5 8.0 8.6 8.9 9.0+PTX' FORCE_CUDA=1 PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' pip install --no-cache-dir --no-build-isolation 'git+https://github.com/nerfstudio-project/gsplat.git@2323de5905d5e90e035f792fe65bad0fedd413e7'"
+
+    # Step 6: Try to install flash_attn (optional performance optimization)
+    - "echo 'Attempting to install flash_attn...'"
+    - "CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST='7.0 7.5 8.0 8.6 8.9 9.0+PTX' FORCE_CUDA=1 PIP_EXTRA_INDEX_URL='https://pypi.ngc.nvidia.com https://download.pytorch.org/whl/cu121' pip install --no-cache-dir flash_attn==2.8.3 || echo 'WARNING: flash_attn installation failed. Inference will work but may be slower.'"
+
+    # Step 7: Cleanup - Remove nvidia libraries to use system CUDA
+    - "pip list | grep nvidia | awk '{print $1}' | xargs -r pip uninstall -y || true"
+    - "pip uninstall -y triton || true"
+    - "find /usr/local/lib/python3.11 -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true"
+    - "rm -rf ~/.cache /tmp/* /root/.cache"
+
+# Predict interface
+predict: "predict.py:Predictor"
