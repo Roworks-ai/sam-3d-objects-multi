@@ -1,6 +1,7 @@
 # Prediction interface for Cog - SAM3D Multi-view
 # https://cog.run/python
 
+import os
 import subprocess
 import shutil
 import tarfile
@@ -9,109 +10,53 @@ import zipfile
 from pathlib import Path
 from typing import List
 
-from cog import BasePredictor, Input  # noqa: cog is available at runtime
+from cog import BasePredictor, Input, Path as CogPath  # noqa: cog is available at runtime
 
 class Predictor(BasePredictor):
     def setup(self) -> None:
         """
-        Setup SAM3D environment:
-        - Step 0: Run hydra patching
-        - Step 1: Authenticate with HuggingFace
-        - Step 2: Download checkpoints if not present
+        Setup SAM3D environment.
+        Hydra patching is done at Docker build time (see cog.yaml).
+        Models should be pre-downloaded locally for fast setup:
+          cd sam3d-multi
+          huggingface-cli download --repo-type model --local-dir checkpoints/hf-download facebook/sam-3d-objects
+          mv checkpoints/hf-download/checkpoints checkpoints/hf
+          rm -rf checkpoints/hf-download
         """
         self.sam3d_dir = Path(__file__).parent
         self.model_tag = "hf"
 
-        # Step 0: Run SAM3D hydra patching
-        print("Running SAM3D hydra patching...")
-        patch_script = self.sam3d_dir / "patching" / "hydra"
-        if patch_script.exists():
-            try:
-                result = subprocess.run(
-                    ["python", str(patch_script), "."],
-                    cwd=str(self.sam3d_dir),
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    print(f"Hydra patching warning: {result.stderr}")
-                else:
-                    print("Hydra patching completed successfully")
-            except Exception as e:
-                print(f"Hydra patching failed: {e}, continuing anyway...")
-
-        # Step 1: Authenticate with HuggingFace using token from .env
-        print("Authenticating with HuggingFace...")
-        env_file = self.sam3d_dir / ".env"
-        hf_token = None
-
-        if env_file.exists():
-            with open(env_file, 'r') as f:
-                for line in f:
-                    if line.startswith('HF_TOKEN='):
-                        hf_token = line.strip().split('=', 1)[1].strip('"\'')
-                        break
-
-        if hf_token:
-            try:
-                result = subprocess.run(
-                    ["huggingface-cli", "login", "--token", hf_token],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    print(f"HuggingFace auth warning: {result.stderr}")
-                else:
-                    print("HuggingFace authentication successful")
-            except Exception as e:
-                print(f"HuggingFace authentication failed: {e}, continuing anyway...")
-        else:
-            print("No HF_TOKEN found in .env file")
-
-        # Step 2: Download SAM3D checkpoints if not present
         checkpoint_dir = self.sam3d_dir / "checkpoints" / self.model_tag
-        if not checkpoint_dir.exists():
-            print(f"Downloading SAM3D checkpoints (tag: {self.model_tag})...")
-            download_dir = self.sam3d_dir / "checkpoints" / f"{self.model_tag}-download"
-
-            try:
-                # Download using huggingface-cli
-                result = subprocess.run(
-                    [
-                        "huggingface-cli", "download",
-                        "--repo-type", "model",
-                        "--local-dir", str(download_dir),
-                        "--max-workers", "1",
-                        "facebook/sam-3d-objects"
-                    ],
-                    cwd=str(self.sam3d_dir),
-                    capture_output=True,
-                    text=True
-                )
-
-                if result.returncode != 0:
-                    raise Exception(f"Download failed: {result.stderr}")
-
-                # Move checkpoints to final location
-                src_checkpoints = download_dir / "checkpoints"
-                if src_checkpoints.exists():
-                    shutil.move(str(src_checkpoints), str(checkpoint_dir))
-
-                # Cleanup download directory
-                if download_dir.exists():
-                    shutil.rmtree(download_dir)
-
-                print(f"Checkpoints downloaded to {checkpoint_dir}")
-            except Exception as e:
-                raise Exception(f"Failed to download SAM3D checkpoints: {e}")
+        if checkpoint_dir.exists():
+            print(f"SAM3D checkpoints found at {checkpoint_dir}")
         else:
-            print(f"SAM3D checkpoints already exist at {checkpoint_dir}")
+            # Fallback: download at runtime if not pre-downloaded
+            print(f"Checkpoints not found, downloading from HuggingFace...")
+            hf_token = os.environ.get("HF_TOKEN")
+            if hf_token:
+                subprocess.run(["huggingface-cli", "auth", "login", "--token", hf_token], check=False)
+
+            download_dir = self.sam3d_dir / "checkpoints" / "hf-download"
+            result = subprocess.run([
+                "huggingface-cli", "download",
+                "--repo-type", "model",
+                "--local-dir", str(download_dir),
+                "--max-workers", "1",
+                "facebook/sam-3d-objects"
+            ], capture_output=True, text=True)
+
+            if result.returncode != 0:
+                raise Exception(f"Failed to download checkpoints: {result.stderr}")
+
+            shutil.move(str(download_dir / "checkpoints"), str(checkpoint_dir))
+            shutil.rmtree(download_dir, ignore_errors=True)
+            print(f"Checkpoints downloaded to {checkpoint_dir}")
 
         print("SAM3D setup completed successfully")
 
     def predict(
         self,
-        input_archive: Path = Input(
+        input_archive: CogPath = Input(
             description="ZIP or TAR archive containing images and masks. Images: X.png, Masks: X_mask.png"
         ),
         mask_prompt: str = Input(
@@ -152,7 +97,7 @@ class Predictor(BasePredictor):
             description="Output directory path. If specified, results are copied here. If empty, results stay in visualization/",
             default=""
         ),
-    ) -> List[Path]:
+    ) -> List[CogPath]:
         """
         Run SAM3D 3D reconstruction using run_inference.py subprocess
         """
@@ -247,13 +192,13 @@ class Predictor(BasePredictor):
                         if file.is_file() and file.suffix in ['.glb', '.ply']:
                             dest_file = output_dir_path / file.name
                             shutil.copy2(file, dest_file)
-                            output_paths.append(Path(dest_file))
+                            output_paths.append(CogPath(dest_file))
                             print(f"  Copied: {file.name} -> {dest_file}")
                 else:
                     # Return files from visualization directory
                     for file in latest_output.glob("*"):
                         if file.is_file() and file.suffix in ['.glb', '.ply']:
-                            output_paths.append(Path(file))
+                            output_paths.append(CogPath(file))
                             print(f"  Found output: {file.name}")
 
         # Cleanup temp directory

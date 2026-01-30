@@ -74,5 +74,16 @@ build:
     - "find /usr/local/lib/python3.11 -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true"
     - "rm -rf ~/.cache /tmp/* /root/.cache"
 
+    # Step 8: Run hydra patching at build time (inline version of patching/hydra script)
+    - "echo 'Running hydra patching...'"
+    - "python -c \"import hydra, os, urllib.request; assert hydra.__version__ == '1.3.2', 'wrong hydra version'; urllib.request.urlretrieve('https://raw.githubusercontent.com/gleize/hydra/78f00766b5f37672aa7232ebbf01bdd74246bd60/hydra/core/utils.py', os.path.join(os.path.dirname(hydra.__file__), 'core', 'utils.py')); print('Hydra patching completed')\""
+
+    # Step 9: Model download note
+    # Models are downloaded at runtime OR pre-downloaded locally before cog predict.
+    # To pre-download: cd sam3d-multi && huggingface-cli download --repo-type model --local-dir checkpoints/hf-download facebook/sam-3d-objects && mv checkpoints/hf-download/checkpoints checkpoints/hf && rm -rf checkpoints/hf-download
+
+    # Step 10: Final cleanup
+    - "rm -rf ~/.cache/huggingface/hub /tmp/* /root/.cache"
+
 # Predict interface
 predict: "predict.py:Predictor"
