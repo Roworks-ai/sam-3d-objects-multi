@@ -23,3 +23,20 @@ Thumbs.db
 
 # Cog
 .cog/
+cog-*.whl
+
+# Build/output
+build.sh
+*.log
+*.zip
+openapi_schema.json
+
+# Env
+.env
+
+# Temp
+bad.txt
+good.txt
+
+# Workflows
+workflows/
